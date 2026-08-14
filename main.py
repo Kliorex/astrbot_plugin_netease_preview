@@ -48,19 +48,38 @@ class NeteasePreview(Star):
         self.config = config
         self.session: aiohttp.ClientSession | None = None
         self.preview_slots = asyncio.Semaphore(2)
+        self.account_verified = False
 
     async def initialize(self):
         timeout = aiohttp.ClientTimeout(
             total=self._int_config("request_timeout", 15, 5, 60)
         )
-        self.session = aiohttp.ClientSession(
-            timeout=timeout,
-            headers={"User-Agent": USER_AGENT, "Referer": "https://music.163.com/"},
-        )
+        headers = {"User-Agent": USER_AGENT, "Referer": "https://music.163.com/"}
+        if cookie := self._cookie_header():
+            headers["Cookie"] = cookie
+        self.session = aiohttp.ClientSession(timeout=timeout, headers=headers)
+        if cookie:
+            await self._validate_account()
 
     async def terminate(self):
         if self.session and not self.session.closed:
             await self.session.close()
+
+    async def _validate_account(self):
+        try:
+            data = await self._get_json(f"{NETEASE_API}/nuser/account/get", params={})
+        except NeteaseError as exc:
+            logger.warning("[netease_preview] Account verification failed: %s", exc)
+            return
+
+        profile = data.get("profile")
+        if isinstance(profile, dict) and profile.get("userId"):
+            self.account_verified = True
+            logger.info("[netease_preview] NetEase account verified")
+        else:
+            logger.warning(
+                "[netease_preview] MUSIC_U is invalid or expired; using guest access"
+            )
 
     @filter.event_message_type(filter.EventMessageType.ALL, priority=1100)
     async def request_song(self, event: AstrMessageEvent):
@@ -129,8 +148,29 @@ class NeteasePreview(Star):
             f"{NETEASE_API}/search/get/web",
             params={"s": keywords, "type": 1, "offset": 0, "limit": limit},
         )
-        raw_songs = data.get("result", {}).get("songs", [])
-        songs = [self._parse_song(item) for item in raw_songs]
+        raw_songs = self._search_items(data)
+        if raw_songs is None:
+            logger.warning(
+                "[netease_preview] Search returned malformed result; retrying fallback"
+            )
+            data = await self._get_json(
+                f"{NETEASE_API}/cloudsearch/pc",
+                params={"s": keywords, "type": 1, "offset": 0, "limit": limit},
+            )
+            raw_songs = self._search_items(data)
+        if raw_songs is None:
+            raise NeteaseError("网易云搜索接口返回异常数据，请稍后重试。")
+
+        songs = []
+        for item in raw_songs:
+            if not isinstance(item, dict):
+                continue
+            try:
+                songs.append(self._parse_song(item))
+            except (KeyError, TypeError, ValueError):
+                logger.warning(
+                    "[netease_preview] Ignored malformed song in search result"
+                )
         if not songs:
             raise NeteaseError("没有搜索到相关歌曲。")
         return songs
@@ -141,9 +181,12 @@ class NeteasePreview(Star):
             params={"id": song_id, "ids": json.dumps([song_id])},
         )
         songs = data.get("songs", [])
-        if not songs:
+        if not isinstance(songs, list) or not songs or not isinstance(songs[0], dict):
             raise NeteaseError("歌曲链接无效或歌曲已下架。")
-        return self._parse_song(songs[0])
+        try:
+            return self._parse_song(songs[0])
+        except (KeyError, TypeError, ValueError) as exc:
+            raise NeteaseError("网易云歌曲详情数据异常，请稍后重试。") from exc
 
     async def _audio_url(self, song_id: int) -> str | None:
         data = await self._get_json(
@@ -151,8 +194,14 @@ class NeteasePreview(Star):
             params={"id": song_id, "ids": json.dumps([song_id]), "br": 128000},
         )
         entries = data.get("data", [])
-        url = entries[0].get("url") if entries else None
-        if not url:
+        if (
+            not isinstance(entries, list)
+            or not entries
+            or not isinstance(entries[0], dict)
+        ):
+            return None
+        url = entries[0].get("url")
+        if not isinstance(url, str) or not url:
             return None
 
         parsed = urlparse(url)
@@ -176,9 +225,24 @@ class NeteasePreview(Star):
             raise NeteaseError("连接网易云超时或网络不可用。") from exc
         except (json.JSONDecodeError, ValueError) as exc:
             raise NeteaseError("网易云接口返回了无法解析的数据。") from exc
+        if not isinstance(data, dict):
+            raise NeteaseError("网易云接口返回了异常数据。")
         if data.get("code") != 200:
             raise NeteaseError(f"网易云接口返回错误码 {data.get('code', '未知')}。")
         return data
+
+    @staticmethod
+    def _search_items(data: dict) -> list | None:
+        result = data.get("result")
+        if isinstance(result, str):
+            try:
+                result = json.loads(result)
+            except (json.JSONDecodeError, TypeError):
+                return None
+        if not isinstance(result, dict):
+            return None
+        songs = result.get("songs", [])
+        return songs if isinstance(songs, list) else None
 
     async def _make_preview(self, url: str, start: int, duration: int) -> Path:
         try:
@@ -307,3 +371,14 @@ class NeteasePreview(Star):
         except (TypeError, ValueError):
             value = default
         return max(minimum, min(value, maximum))
+
+    def _cookie_header(self) -> str:
+        token = str(self.config.get("music_u", "")).strip()
+        if token.startswith("MUSIC_U="):
+            token = token.removeprefix("MUSIC_U=").split(";", 1)[0].strip()
+        if not token:
+            return ""
+        if "\r" in token or "\n" in token or ";" in token:
+            logger.warning("[netease_preview] Ignored invalid MUSIC_U value")
+            return ""
+        return f"MUSIC_U={token}; os=pc; appver=9.2.10"

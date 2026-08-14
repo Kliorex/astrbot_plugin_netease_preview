@@ -1,4 +1,10 @@
 {
+  "music_u": {
+    "description": "网易云 MUSIC_U 登录凭证",
+    "type": "string",
+    "default": "",
+    "hint": "选填。填写浏览器 Cookie 中 MUSIC_U 的值，或完整的 MUSIC_U=...；用于访问该账号有播放权限的 VIP 歌曲。修改后需重载插件。"
+  },
   "preview_seconds": {
     "description": "语音预览时长（秒）",
     "type": "int",
