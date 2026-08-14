@@ -8,6 +8,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from urllib.parse import parse_qs, urlparse
 
+import aiofiles
 import aiohttp
 import astrbot.api.message_components as Comp
 import imageio_ffmpeg
@@ -40,7 +41,7 @@ class Song:
     "netease_preview",
     "24097",
     "搜索网易云歌曲并发送数秒 WAV 语音预览",
-    "1.0.0",
+    "1.1.0",
 )
 class NeteasePreview(Star):
     def __init__(self, context: Context, config: AstrBotConfig):
@@ -55,10 +56,8 @@ class NeteasePreview(Star):
             total=self._int_config("request_timeout", 15, 5, 60)
         )
         headers = {"User-Agent": USER_AGENT, "Referer": "https://music.163.com/"}
-        if cookie := self._cookie_header():
-            headers["Cookie"] = cookie
         self.session = aiohttp.ClientSession(timeout=timeout, headers=headers)
-        if cookie:
+        if self._cookie_header():
             await self._validate_account()
 
     async def terminate(self):
@@ -216,8 +215,13 @@ class NeteasePreview(Star):
     async def _get_json(self, url: str, params: dict) -> dict:
         if not self.session or self.session.closed:
             await self.initialize()
+        headers = {}
+        if cookie := self._cookie_header():
+            headers["Cookie"] = cookie
         try:
-            async with self.session.get(url, params=params) as response:
+            async with self.session.get(
+                url, params=params, headers=headers
+            ) as response:
                 if response.status != 200:
                     raise NeteaseError(f"网易云接口返回 HTTP {response.status}。")
                 data = await response.json(content_type=None)
@@ -255,10 +259,10 @@ class NeteasePreview(Star):
                 "找不到 ffmpeg，请检查插件依赖或配置 ffmpeg_path。"
             ) from exc
 
+        source = await self._download_audio(url)
         descriptor, path = tempfile.mkstemp(prefix="astrbot_netease_", suffix=".wav")
         os.close(descriptor)
         output = Path(path)
-        headers = f"Referer: https://music.163.com/\r\nUser-Agent: {USER_AGENT}\r\n"
         command = [
             ffmpeg,
             "-nostdin",
@@ -266,12 +270,10 @@ class NeteasePreview(Star):
             "-loglevel",
             "error",
             "-y",
-            "-headers",
-            headers,
             "-ss",
             str(start),
             "-i",
-            url,
+            str(source),
             "-t",
             str(duration),
             "-vn",
@@ -303,24 +305,75 @@ class NeteasePreview(Star):
             except asyncio.TimeoutError as exc:
                 raise NeteaseError("生成试听片段超时。") from exc
         except OSError as exc:
+            source.unlink(missing_ok=True)
             output.unlink(missing_ok=True)
             raise NeteaseError("无法启动 ffmpeg，请检查可执行文件路径。") from exc
         except BaseException:
             if process and process.returncode is None:
                 process.kill()
                 await process.wait()
+            source.unlink(missing_ok=True)
             output.unlink(missing_ok=True)
             raise
 
+        source_size = source.stat().st_size if source.exists() else 0
+        source.unlink(missing_ok=True)
         if (
             process.returncode != 0
             or not output.exists()
             or output.stat().st_size < 1024
         ):
-            detail = stderr.decode(errors="replace").strip()[-300:]
-            logger.warning("[netease_preview] ffmpeg failed: %s", detail)
+            detail = stderr.decode(errors="replace").strip()[-300:] or "<empty stderr>"
+            logger.warning(
+                "[netease_preview] ffmpeg failed: code=%s source_bytes=%s "
+                "output_bytes=%s detail=%s",
+                process.returncode,
+                source_size,
+                output.stat().st_size if output.exists() else 0,
+                detail,
+            )
             output.unlink(missing_ok=True)
             raise NeteaseError("音源暂时无法读取或转换。")
+        return output
+
+    async def _download_audio(self, url: str) -> Path:
+        if not self.session or self.session.closed:
+            await self.initialize()
+
+        descriptor, path = tempfile.mkstemp(prefix="astrbot_netease_", suffix=".mp3")
+        os.close(descriptor)
+        output = Path(path)
+        max_bytes = self._int_config("max_audio_mb", 20, 5, 100) * 1024 * 1024
+        downloaded = 0
+        try:
+            timeout = aiohttp.ClientTimeout(
+                total=self._int_config("download_timeout", 60, 15, 300)
+            )
+            async with self.session.get(
+                url, allow_redirects=True, timeout=timeout
+            ) as response:
+                if response.status != 200:
+                    raise NeteaseError(f"网易云音源返回 HTTP {response.status}。")
+                content_length = response.content_length
+                if content_length and content_length > max_bytes:
+                    raise NeteaseError("歌曲音源超过临时下载大小限制。")
+
+                async with aiofiles.open(output, "wb") as file:
+                    async for chunk in response.content.iter_chunked(64 * 1024):
+                        downloaded += len(chunk)
+                        if downloaded > max_bytes:
+                            raise NeteaseError("歌曲音源超过临时下载大小限制。")
+                        await file.write(chunk)
+        except NeteaseError:
+            output.unlink(missing_ok=True)
+            raise
+        except (aiohttp.ClientError, asyncio.TimeoutError, OSError) as exc:
+            output.unlink(missing_ok=True)
+            raise NeteaseError("下载网易云音源失败。") from exc
+
+        if downloaded < 1024:
+            output.unlink(missing_ok=True)
+            raise NeteaseError("网易云返回了空音源。")
         return output
 
     def _preview_start(self, song: Song, duration: int) -> int:

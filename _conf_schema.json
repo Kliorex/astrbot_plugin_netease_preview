@@ -33,6 +33,17 @@
     "type": "int",
     "default": 30
   },
+  "download_timeout": {
+    "description": "音源下载超时（秒）",
+    "type": "int",
+    "default": 60
+  },
+  "max_audio_mb": {
+    "description": "临时音源大小上限（MB）",
+    "type": "int",
+    "default": 20,
+    "hint": "有效范围 5-100 MB，超过限制的歌曲不会下载或转换。"
+  },
   "ffmpeg_path": {
     "description": "自定义 ffmpeg 路径",
     "type": "string",
