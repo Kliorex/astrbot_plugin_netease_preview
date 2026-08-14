@@ -41,7 +41,7 @@ class Song:
     "netease_preview",
     "24097",
     "搜索网易云歌曲并发送数秒 WAV 语音预览",
-    "1.1.0",
+    "1.1.1",
 )
 class NeteasePreview(Star):
     def __init__(self, context: Context, config: AstrBotConfig):

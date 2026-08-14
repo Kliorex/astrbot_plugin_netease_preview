@@ -2,7 +2,7 @@ name: netease_preview
 display_name: 网易云点歌预览
 desc: 搜索网易云歌曲，截取数秒音频并作为 WAV 语音消息发送。
 short_desc: 使用点歌指令发送网易云歌曲语音预览。
-version: v1.1.0
+version: v1.1.1
 author: "24097"
 repo: ""
 astrbot_version: ">=4.13,<5"
