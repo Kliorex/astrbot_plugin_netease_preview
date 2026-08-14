@@ -62,15 +62,17 @@ class NeteasePreview(Star):
         if self.session and not self.session.closed:
             await self.session.close()
 
-    @filter.command("点歌", alias={"网易云点歌", "music"})
+    @filter.event_message_type(filter.EventMessageType.ALL, priority=1100)
     async def request_song(self, event: AstrMessageEvent):
         """搜索网易云歌曲并发送一段语音预览。"""
-        query = self._command_argument(event.message_str)
+        query = self._request_argument(event.message_str)
+        if query is None:
+            return
+
+        event.stop_event()
         if not query:
             await event.send(
-                event.plain_result(
-                    "用法：/点歌 歌名 [歌手]\n也可以粘贴网易云歌曲链接。"
-                )
+                event.plain_result("用法：点歌 歌名 [歌手]\n也可以粘贴网易云歌曲链接。")
             )
             return
 
@@ -290,9 +292,14 @@ class NeteasePreview(Star):
         return None
 
     @staticmethod
-    def _command_argument(message: str) -> str:
-        parts = message.strip().split(maxsplit=1)
-        return parts[1].strip() if len(parts) == 2 else ""
+    def _request_argument(message: str) -> str | None:
+        stripped = message.strip()
+        for command in ("网易云点歌", "music", "点歌"):
+            if stripped == command:
+                return ""
+            if stripped.startswith(command) and stripped[len(command)].isspace():
+                return stripped[len(command) :].strip()
+        return None
 
     def _int_config(self, key: str, default: int, minimum: int, maximum: int) -> int:
         try:
