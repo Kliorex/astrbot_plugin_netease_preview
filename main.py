@@ -17,6 +17,7 @@ from astrbot.api.event import AstrMessageEvent, filter
 from astrbot.api.star import Context, Star, register
 
 NETEASE_API = "https://music.163.com/api"
+LOWEST_MP3_BITRATE = 128000
 USER_AGENT = (
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
     "AppleWebKit/537.36 Chrome/124.0 Safari/537.36"
@@ -41,7 +42,7 @@ class Song:
     "netease_preview",
     "24097",
     "搜索网易云歌曲并发送数秒 WAV 语音预览",
-    "1.1.1",
+    "1.1.2",
 )
 class NeteasePreview(Star):
     def __init__(self, context: Context, config: AstrBotConfig):
@@ -144,7 +145,7 @@ class NeteasePreview(Star):
     async def _search(self, keywords: str) -> list[Song]:
         limit = self._int_config("search_limit", 5, 1, 10)
         data = await self._get_json(
-            f"{NETEASE_API}/search/get/web",
+            f"{NETEASE_API}/cloudsearch/pc",
             params={"s": keywords, "type": 1, "offset": 0, "limit": limit},
         )
         raw_songs = self._search_items(data)
@@ -153,7 +154,7 @@ class NeteasePreview(Star):
                 "[netease_preview] Search returned malformed result; retrying fallback"
             )
             data = await self._get_json(
-                f"{NETEASE_API}/cloudsearch/pc",
+                f"{NETEASE_API}/search/get/web",
                 params={"s": keywords, "type": 1, "offset": 0, "limit": limit},
             )
             raw_songs = self._search_items(data)
@@ -190,7 +191,13 @@ class NeteasePreview(Star):
     async def _audio_url(self, song_id: int) -> str | None:
         data = await self._get_json(
             f"{NETEASE_API}/song/enhance/player/url",
-            params={"id": song_id, "ids": json.dumps([song_id]), "br": 128000},
+            params={
+                "id": song_id,
+                "ids": json.dumps([song_id]),
+                "br": LOWEST_MP3_BITRATE,
+                "level": "standard",
+                "encodeType": "mp3",
+            },
         )
         entries = data.get("data", [])
         if (
