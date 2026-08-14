@@ -1,0 +1,36 @@
+{
+  "preview_seconds": {
+    "description": "语音预览时长（秒）",
+    "type": "int",
+    "default": 8,
+    "hint": "有效范围 3-15 秒。"
+  },
+  "preview_start": {
+    "description": "预览起始位置（秒）",
+    "type": "int",
+    "default": 30,
+    "hint": "有效范围 0-300 秒；歌曲较短时会自动调整。"
+  },
+  "search_limit": {
+    "description": "搜索候选数量",
+    "type": "int",
+    "default": 5,
+    "hint": "依次检查前几项是否存在可用音源，有效范围 1-10。"
+  },
+  "request_timeout": {
+    "description": "网易云请求超时（秒）",
+    "type": "int",
+    "default": 15
+  },
+  "convert_timeout": {
+    "description": "音频转换超时（秒）",
+    "type": "int",
+    "default": 30
+  },
+  "ffmpeg_path": {
+    "description": "自定义 ffmpeg 路径",
+    "type": "string",
+    "default": "",
+    "hint": "通常留空，插件会使用 imageio-ffmpeg 自带的可执行文件。"
+  }
+}
